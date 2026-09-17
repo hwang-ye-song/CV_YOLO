@@ -19,3 +19,6 @@ build/
 notebooks/bus_crops/
 notebooks/predicted1.jpg
 data/stamp_robust/
+datasets/
+.ultralytics/
+weights/

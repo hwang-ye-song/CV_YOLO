@@ -31,6 +31,7 @@ TITLE = "YOLOv8 기반 제조 데이터<br>객체 탐지 실습"
 SUBTITLE = "사전학습 모델 이해 → stamp 데이터 학습·평가 → 모델·조건별 성능 실험"
 NOTEBOOKS = ["yolov8_manufacturing_practice.ipynb"]
 MAX_STREAM_LINES = 30   # 학습 로그처럼 긴 출력은 앞뒤만 남긴다
+MAX_STREAM_CHARS = 2400
 EDGE_CANDIDATES = [
     Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
     Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
@@ -46,10 +47,32 @@ PRINT_CSS = """
   th, td { border: 1px solid #d0d7de; padding: 4px 8px; }
   th { background: #f6f8fa; }
   h1, h2, h3 { page-break-after: avoid; }
+  .jp-OutputArea-output { overflow: visible !important; }
+  .jp-OutputArea-output table.dataframe { font-size: 7pt; }
+  .jp-OutputArea-output table.dataframe th, .jp-OutputArea-output table.dataframe td { padding: 2px 4px; }
   .jp-Cell { page-break-inside: auto; }
   .jp-InputArea, .jp-OutputArea-child { page-break-inside: avoid; }
 </style>
 """
+
+
+def shorten(lines: list[str]) -> list[str]:
+    """앞뒤 일부만 남긴다. 줄 수(MAX_STREAM_LINES)와 글자 수(MAX_STREAM_CHARS) 둘 다 기준으로 자른다."""
+    half_chars = MAX_STREAM_CHARS // 2
+    head, n = [], 0
+    for l in lines[:MAX_STREAM_LINES // 2]:
+        if n + len(l) > half_chars:
+            break
+        head.append(l)
+        n += len(l)
+    tail, n = [], 0
+    for l in reversed(lines[len(head):][-(MAX_STREAM_LINES // 2):]):
+        if n + len(l) > half_chars:
+            break
+        tail.insert(0, l)
+        n += len(l)
+    skipped = len(lines) - len(head) - len(tail)
+    return lines if skipped <= 0 else head + [f"... ({skipped}줄 생략) ..."] + tail
 
 
 class DropNoise(Preprocessor):
@@ -68,13 +91,14 @@ class DropNoise(Preprocessor):
             else:
                 merged.append(o)
         for o in merged:
+            # 객체 repr 처럼 거대한 텍스트 결과도 앞뒤만 남긴다 (그림·표는 그대로)
+            if o.output_type in ("execute_result", "display_data") and "text/plain" in o.get("data", {}) \
+                    and len(o["data"]) == 1:
+                o["data"]["text/plain"] = "\n".join(shorten(o["data"]["text/plain"].splitlines()))
             if o.output_type != "stream":
                 continue
             lines = [l for l in o.text.splitlines() if "it/s" not in l and "s/it" not in l]
-            if len(lines) > MAX_STREAM_LINES:
-                half = MAX_STREAM_LINES // 2
-                lines = lines[:half] + [f"... ({len(lines) - MAX_STREAM_LINES}줄 생략) ..."] + lines[-half:]
-            o.text = "\n".join(lines) + "\n"
+            o.text = "\n".join(shorten(lines)) + "\n"
         cell.outputs = merged
         return cell, resources
 
