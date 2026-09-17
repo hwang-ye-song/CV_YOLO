@@ -1,0 +1,17 @@
+# 환경
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+
+# 데이터셋 / 학습 산출물 (용량 큼 — 스크립트로 재생성 가능)
+data/
+runs/
+*.pt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 노트북 실행 부산물
+notebooks/crops/
+notebooks/*.jpg
