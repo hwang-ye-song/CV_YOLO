@@ -15,3 +15,4 @@ Thumbs.db
 # 노트북 실행 부산물
 notebooks/crops/
 notebooks/*.jpg
+build/
