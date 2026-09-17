@@ -16,3 +16,6 @@ Thumbs.db
 notebooks/crops/
 notebooks/*.jpg
 build/
+notebooks/bus_crops/
+notebooks/predicted1.jpg
+data/stamp_robust/

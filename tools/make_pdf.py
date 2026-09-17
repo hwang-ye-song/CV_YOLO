@@ -1,11 +1,13 @@
-"""보고서 + 실행된 노트북을 제출용 PDF 한 파일로 묶는다.
+"""실습 노트북(+ 선택적으로 보고서)을 제출용 PDF 한 파일로 묶는다.
 
-    python tools/make_pdf.py
+    python tools/make_pdf.py                 # 실습 노트북만
+    python tools/make_pdf.py --with-report   # report/REPORT.md 도 포함
 
-순서: 표지 → report/REPORT.md → notebooks/0*.ipynb (실행된 것만)
+순서: 표지 → (보고서) → NOTEBOOKS 에 적힌 노트북 (실행된 것만)
 각 부분을 HTML 로 만든 뒤 Edge(headless) 로 PDF 인쇄 → pypdf 로 병합 + 책갈피.
 결과: CV-YOLO_제출본.pdf
 """
+import argparse
 import datetime as dt
 import html
 import json
@@ -25,6 +27,10 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "CV-YOLO_제출본.pdf"
 REPO_URL = "https://github.com/hwang-ye-song/CV_YOLO"
 AUTHOR = "hwang-ye-song"
+TITLE = "YOLOv8 기반 제조 데이터<br>객체 탐지 실습"
+SUBTITLE = "사전학습 모델 이해 → stamp 데이터 학습·평가 → 모델·조건별 성능 실험"
+NOTEBOOKS = ["yolov8_manufacturing_practice.ipynb"]
+MAX_STREAM_LINES = 30   # 학습 로그처럼 긴 출력은 앞뒤만 남긴다
 EDGE_CANDIDATES = [
     Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
     Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
@@ -47,11 +53,29 @@ PRINT_CSS = """
 
 
 class DropNoise(Preprocessor):
-    """다운로드 진행바 같은 stderr 출력은 PDF 에서 뺀다."""
+    """stderr(진행바) 출력은 빼고, 긴 stdout 은 앞뒤만 남긴다."""
 
     def preprocess_cell(self, cell, resources, index):
-        if cell.cell_type == "code":
-            cell.outputs = [o for o in cell.outputs if not (o.output_type == "stream" and o.name == "stderr")]
+        if cell.cell_type != "code":
+            return cell, resources
+        # 학습 로그는 여러 stream 조각으로 나뉘어 나오므로 연속된 stdout 을 먼저 합친다
+        merged = []
+        for o in cell.outputs:
+            if o.output_type == "stream" and o.name == "stderr":
+                continue
+            if merged and o.output_type == "stream" and merged[-1].output_type == "stream":
+                merged[-1].text += o.text
+            else:
+                merged.append(o)
+        for o in merged:
+            if o.output_type != "stream":
+                continue
+            lines = [l for l in o.text.splitlines() if "it/s" not in l and "s/it" not in l]
+            if len(lines) > MAX_STREAM_LINES:
+                half = MAX_STREAM_LINES // 2
+                lines = lines[:half] + [f"... ({len(lines) - MAX_STREAM_LINES}줄 생략) ..."] + lines[-half:]
+            o.text = "\n".join(lines) + "\n"
+        cell.outputs = merged
         return cell, resources
 
 
@@ -61,8 +85,8 @@ def cover_html(parts: list[str]) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8">{PRINT_CSS}</head><body>
 <div style="margin-top:60mm;text-align:center">
   <div style="font-size:12pt;color:#57606a">컴퓨터 비전 프로젝트</div>
-  <h1 style="font-size:26pt;margin:10px 0 6px">YOLO 기반 제조 제품<br>정상/불량 영역 탐지</h1>
-  <div style="font-size:12pt;color:#57606a">사전학습 모델 이해 → 제조 데이터 학습 → 직접 촬영 데이터로 현장 적용 검증</div>
+  <h1 style="font-size:26pt;margin:10px 0 6px">{TITLE}</h1>
+  <div style="font-size:12pt;color:#57606a">{SUBTITLE}</div>
 </div>
 <div style="margin:40mm auto 0;width:70%">
   <table style="width:100%">
@@ -122,10 +146,14 @@ def main():
     if edge is None:
         raise SystemExit("Microsoft Edge 를 찾을 수 없습니다.")
 
-    sections = [("프로젝트 보고서", report_html(ROOT / "report" / "REPORT.md"))]
-    for nb in sorted((ROOT / "notebooks").glob("0*.ipynb")):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--with-report", action="store_true")
+    args = ap.parse_args()
+
+    sections = [("프로젝트 보고서", report_html(ROOT / "report" / "REPORT.md"))] if args.with_report else []
+    for nb in (ROOT / "notebooks" / n for n in NOTEBOOKS):
         if is_executed(nb):
-            sections.append((f"실습 노트북 — {nb.stem}", notebook_html(nb)))
+            sections.append((f"실습 노트북 — {nb.name}", notebook_html(nb)))
         else:
             print(f"건너뜀 (아직 실행 안 됨): {nb.name}")
 
@@ -144,7 +172,7 @@ def main():
             writer.append(PdfReader(p))
             writer.add_outline_item(title, start)
             print(f"{title}: {len(writer.pages) - start}쪽")
-        writer.add_metadata({"/Title": "YOLO 기반 제조 제품 정상/불량 영역 탐지", "/Author": AUTHOR})
+        writer.add_metadata({"/Title": TITLE.replace("<br>", " "), "/Author": AUTHOR})
         with open(OUT, "wb") as f:
             writer.write(f)
         print(f"완료 → {OUT} (총 {len(writer.pages)}쪽)")

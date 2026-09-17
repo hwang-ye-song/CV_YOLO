@@ -7,3 +7,5 @@ pandas
 matplotlib
 jupyter
 ipykernel
+pypdf
+markdown
