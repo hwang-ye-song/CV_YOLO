@@ -2,8 +2,9 @@
 
 제조 공정 영상(작업대 위 **신발 + 도장**)에서 YOLO로 물체를 탐지하고, 모델·데이터·촬영 조건에 따른 성능 범위를 실험한 프로젝트입니다.
 
-- 📓 **실습 노트북**: [notebooks/yolov8_manufacturing_practice.ipynb](notebooks/yolov8_manufacturing_practice.ipynb)
-- 📄 **제출용 PDF** (노트북 전체, 48쪽): [CV-YOLO_제출본.pdf](CV-YOLO_제출본.pdf)
+- 📓 **실습 노트북**: [notebooks/yolov8_manufacturing_practice.ipynb](notebooks/yolov8_manufacturing_practice.ipynb) (GitHub 표시용: 이미지 압축·출력 정리)
+  - 원본(실행 직후 그대로, 10.7MB): [yolov8_manufacturing_practice_original.ipynb](notebooks/yolov8_manufacturing_practice_original.ipynb) — 용량 때문에 GitHub 웹에서는 안 열릴 수 있어 내려받아 Jupyter로 열어 주세요
+- 📄 **제출용 PDF** (노트북 전체, 50쪽): [CV-YOLO_제출본.pdf](CV-YOLO_제출본.pdf)
 
 ## 노트북 구성
 
@@ -59,7 +60,8 @@
 ```
 CV-YOLO/
 ├── notebooks/
-│   ├── yolov8_manufacturing_practice.ipynb   # 실습 + 개인 실험 + 회고 (제출 본문)
+│   ├── yolov8_manufacturing_practice.ipynb            # 실습 + 개인 실험 + 회고 (제출 본문, GitHub 표시용)
+│   ├── yolov8_manufacturing_practice_original.ipynb   # 위와 같은 내용의 원본 (이미지·출력 그대로)
 │   └── 03_my_defect_detection.ipynb          # (진행 예정) 직접 촬영한 정상/불량 제품 탐지
 ├── src/                  # 노트북 흐름을 재사용 가능한 스크립트로 리팩터링
 │   ├── common.py         # 경로·클래스·디바이스 설정
