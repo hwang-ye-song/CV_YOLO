@@ -69,7 +69,9 @@ CV-YOLO/
 │   ├── train.py          # 파인튜닝
 │   ├── evaluate.py       # mAP + 판 단위 OK/NG 판정, 촬영 조건 강건성
 │   └── live.py           # 웹캠 실시간 정상/불량 표시
-├── tools/make_pdf.py     # 노트북 → 제출용 PDF
+├── tools/
+│   ├── make_pdf.py           # 노트북 → 제출용 PDF
+│   └── shrink_notebook.py    # 노트북 이미지 용량 줄이기 (GitHub 표시용)
 ├── report/images/        # 그래프
 ├── results/              # 실험 결과 csv
 └── CV-YOLO_제출본.pdf
@@ -89,7 +91,8 @@ python -m ipykernel install --sys-prefix --name cv-yolo --display-name "CV-YOLO 
 
 1. [Roboflow stamp 데이터셋](https://universe.roboflow.com/warisara-kaewsuwan-cf2hs/stamp-bcrhe) **v10**을 YOLOv8 형식으로 받아 `datasets/stamp/`에 압축 해제 (노트북의 `../datasets/stamp/...` 경로와 맞춤)
 2. `Jupyter_실행.bat` 실행 → `yolov8_manufacturing_practice.ipynb`를 **CV-YOLO (.venv)** 커널로 실행
-3. PDF 생성: `python tools/make_pdf.py`
+3. 이미지 용량 줄이기: `python tools/shrink_notebook.py notebooks/yolov8_manufacturing_practice.ipynb`
+4. PDF 생성: `python tools/make_pdf.py`
 
 ## 환경
 Windows 11 · Python 3.11 · PyTorch 2.11 (CUDA 12.8) · Ultralytics 8.4.154 · RTX 5060 Laptop 8GB
