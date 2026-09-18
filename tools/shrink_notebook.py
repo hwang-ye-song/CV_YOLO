@@ -5,7 +5,7 @@
 - 학습 로그처럼 수천 조각으로 나뉜 출력을 셀마다 하나로 합치고,
   진행 막대가 '\\r' 로 덮어쓴 줄은 Jupyter 화면처럼 마지막 상태만 남기고, 색상 코드는 지운다
 - 가로가 MAX_W 보다 큰 이미지는 비율을 유지해 줄인다
-- PNG 를 JPEG(품질 85)로 바꿨을 때 더 작아지는 경우에만 바꾼다 (사진이 들어간 그림)
+- PNG·JPEG 를 JPEG(품질 75)로 바꿨을 때 더 작아지는 경우에만 바꾼다 (사진이 들어간 그림)
 코드와 결과 내용은 바꾸지 않는다.
 """
 import base64
@@ -17,8 +17,8 @@ from pathlib import Path
 
 from PIL import Image
 
-MAX_W = 1400
-QUALITY = 85
+MAX_W = 1000
+QUALITY = 75
 
 
 def shrink(b64: str) -> tuple[str, str]:
@@ -69,10 +69,12 @@ def main(path: str):
             cell["outputs"] = merge_streams(cell["outputs"])
         for out in cell.get("outputs", []):
             data = out.get("data", {})
-            if "image/png" in data:
-                mime, b64 = shrink("".join(data.pop("image/png")))
-                data[mime] = b64
-                out.get("metadata", {}).pop("image/png", None)
+            for key in ("image/png", "image/jpeg"):
+                if key in data:
+                    mime, b64 = shrink("".join(data.pop(key)))
+                    data[mime] = b64
+                    out.get("metadata", {}).pop(key, None)
+                    break
     p.write_text(json.dumps(nb, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     print(f"{before / 1e6:.1f} MB → {p.stat().st_size / 1e6:.1f} MB")
 
