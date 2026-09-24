@@ -1,18 +1,20 @@
 """COCO 도시 사진으로 틀린그림찾기 데이터셋을 만든다 (문제 사진 A/B + 정답).
 
-    python spotdiff/src/make_city_dataset.py --n 20 --diffs 3
+    python spotdiff/src/make_city_dataset.py --min 5 --max 7 --hard 10
 
-- 도시 장면(자동차·버스·트럭·신호등이 충분히 보이는 사진)만 고른다.
-- 사진 A는 원본, 사진 B는 물체를 지우거나(remove) 옆으로 옮기거나(move) 하나 더 놓아(copy) 만든다.
-- 박스 안에서 물체 모양만 따내(GrabCut) 지우고 붙이므로 배경이 같이 따라오지 않는다.
-- 옮기거나 붙일 때는 땅 위에 놓이도록 발밑 높이를 맞춘다.
-- 바꾼 위치는 COCO 정답 박스를 그대로 쓰므로, 정답이 자동으로 기록된다.
+자연스럽게 보이도록 "작게, 여러 개" 바꾼다.
+- 사라짐  : 사진의 3% 이하인 작은 물체만 LaMa 인페인팅으로 지운다 (큰 구멍은 티가 난다)
+- 색 바뀜 : 물체 모양은 그대로 두고 색(색상)만 돌린다
+- 좌우 반전: 물체를 제자리에서 뒤집는다
+- 추가/이동: 같은 사진 안에서만, 바닥 색이 비슷한 자리에만 놓는다 (다른 사진 것은 붙이지 않는다)
+물체 모양은 YOLOv8 분할 모델(yolov8n-seg)로 따고, 못 따면 GrabCut 을 쓴다.
 
 결과: spotdiff/dataset_city/
-    A/xxx.jpg, B/xxx.jpg          문제 사진 한 쌍
-    answer/xxx.jpg                정답 표시 (A | B 나란히, 바뀐 곳에 번호)
-    answers.json                  사진별 정답 목록 (종류, 물체, A에서의 박스, B에서의 박스)
-    answer_sheet.jpg              전체 정답을 한 장에 모은 확인용 이미지
+    A/, B/          문제 사진 한 쌍
+    answer/         정답 표시 이미지 (A | B)
+    answers.json    정답 좌표
+    정답표.md        사람이 보는 정답표
+    answer_sheet.jpg
 """
 import argparse
 import json
@@ -21,19 +23,18 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 COCO = ROOT / "data" / "coco128"
 OUT = ROOT / "dataset_city"
 
-NAMES = {0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 5: "bus", 7: "truck", 9: "traffic light",
-         10: "fire hydrant", 11: "stop sign", 12: "parking meter", 13: "bench", 24: "backpack", 26: "handbag",
-         28: "suitcase", 25: "umbrella", 16: "dog"}
-VEHICLE_SIGN = {2, 3, 5, 7, 9, 10, 11, 12}
-GROUND = {0, 1, 2, 3, 5, 7, 10, 12, 13, 16}          # 땅 위에 서 있는 물체 (신호등·표지판은 제외)
-KIND_KO = {"remove": "사라짐", "move": "이동", "copy": "추가"}
+CITY_CLASSES = {2, 3, 5, 7, 9, 10, 11, 12}       # car motorcycle bus truck traffic-light hydrant stop-sign meter
+KIND_KO = {"remove": "사라짐", "recolor": "색 바뀜", "flip": "좌우 반전", "copy": "추가", "move": "이동"}
+FLIPPABLE = {2, 3, 5, 7, 1, 11, 13}               # 뒤집어도 말이 되는 물체 (차, 오토바이, 버스, 트럭, 자전거, 표지판, 벤치)
 
 
+# ---------------------------------------------------------------- 도구
 def load_boxes(img_path, w, h):
     lbl = COCO / "labels" / "train2017" / (img_path.stem + ".txt")
     out = []
@@ -44,11 +45,6 @@ def load_boxes(img_path, w, h):
     return out
 
 
-def is_city(objs, w, h):
-    """차·버스·트럭·신호등 등이 하나라도 사진의 1% 이상 크기로 보이면 도시 장면"""
-    return any(o[0] in VEHICLE_SIGN and (o[3] - o[1]) * (o[4] - o[2]) >= w * h * 0.01 for o in objs)
-
-
 def iou(a, b):
     ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
     iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
@@ -57,20 +53,7 @@ def iou(a, b):
     return inter / ua if ua else 0
 
 
-def usable(obj, others, w, h):
-    """지우거나 옮기기 좋은 물체: 너무 크거나 작지 않고, 가장자리에 붙지 않고, 다른 물체와 거의 안 겹침"""
-    c, x1, y1, x2, y2 = obj
-    area = (x2 - x1) * (y2 - y1) / (w * h)
-    if not (0.003 <= area <= 0.08) or c not in NAMES or (x2 - x1) < 15 or (y2 - y1) < 15:
-        return False
-    if x1 < 2 or y1 < 2 or x2 > w - 2 or y2 > h - 2:
-        return False
-    return all(iou(obj[1:], o[1:]) < 0.15 for o in others if o is not obj)
-
-
-def object_mask(img, box, fallback=True):
-    """박스 안에서 물체 모양만 따낸다 (GrabCut). 실패하면 박스 안쪽 타원으로 대신한다.
-    fallback=False 이면 실패했을 때 None 을 돌려준다 (붙여 넣을 조각에는 타원을 쓰지 않는다)."""
+def grabcut_mask(img, box):
     x1, y1, x2, y2 = box
     mask = np.zeros(img.shape[:2], np.uint8)
     try:
@@ -78,112 +61,175 @@ def object_mask(img, box, fallback=True):
         cv2.grabCut(img, mask, (x1, y1, x2 - x1, y2 - y1), bg, fg, 4, cv2.GC_INIT_WITH_RECT)
         m = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
     except cv2.error:
-        m = np.zeros(img.shape[:2], np.uint8)
-    ratio = m[y1:y2, x1:x2].mean() / 255
-    if not fallback and not (0.2 <= ratio <= 0.9):   # 너무 적거나 박스를 거의 다 채우면 실패로 본다
         return None
-    if ratio < 0.15:                              # 너무 조금 잡히면 타원으로 대신
-        m[:] = 0
-        cv2.ellipse(m, ((x1 + x2) // 2, (y1 + y2) // 2), ((x2 - x1) // 2, (y2 - y1) // 2), 0, 0, 360, 255, -1)
-    return m
+    ratio = m[y1:y2, x1:x2].mean() / 255
+    return m if 0.2 <= ratio <= 0.95 else None
 
 
-def erase(img, obj_mask, grow=7):
-    """물체 모양(조금 넓혀서)만 주변 배경으로 메운다."""
-    m = cv2.dilate(obj_mask, np.ones((grow, grow), np.uint8), iterations=2)
-    return cv2.inpaint(img, m, 9, cv2.INPAINT_TELEA)
+class Editor:
+    def __init__(self):
+        from ultralytics import YOLO
+        from simple_lama_inpainting import SimpleLama
+        self.seg = YOLO("yolov8n-seg.pt")
+        self.lama = SimpleLama()
+        self.names = self.seg.names
+
+    def masks_for(self, img, boxes):
+        """정답 박스마다 물체 모양 마스크를 만든다. 분할 모델 결과와 겹치면 그것을, 아니면 GrabCut."""
+        r = self.seg.predict(img, conf=0.25, device=0, retina_masks=True, verbose=False)[0]
+        seg_boxes = r.boxes.xyxy.cpu().numpy().astype(int) if r.masks is not None else []
+        seg_masks = (r.masks.data.cpu().numpy() * 255).astype(np.uint8) if r.masks is not None else []
+        out = []
+        for c, x1, y1, x2, y2 in boxes:
+            m = None
+            for sb, sm in zip(seg_boxes, seg_masks):
+                if iou((x1, y1, x2, y2), tuple(sb)) > 0.5:
+                    m = sm.copy()
+                    m[:y1, :] = 0; m[y2:, :] = 0; m[:, :x1] = 0; m[:, x2:] = 0
+                    break
+            if m is None:
+                m = grabcut_mask(img, (x1, y1, x2, y2))
+            out.append(m)
+        return out
+
+    def remove(self, img, mask, grow=7):
+        h, w = img.shape[:2]
+        m = cv2.dilate(mask, np.ones((grow, grow), np.uint8), iterations=2)
+        res = self.lama(Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)), Image.fromarray(m))
+        return cv2.cvtColor(np.array(res), cv2.COLOR_RGB2BGR)[:h, :w]
 
 
-def paste(img, patch, patch_mask, dst_xy):
-    """물체 조각을 부드러운 가장자리로 합성한다."""
+def alpha_paste(img, patch, mask, xy):
     out = img.copy()
     ph, pw = patch.shape[:2]
-    x, y = dst_xy
-    alpha = cv2.GaussianBlur(patch_mask.astype(np.float32) / 255, (7, 7), 0)[..., None]
+    x, y = xy
+    a = cv2.GaussianBlur(mask.astype(np.float32) / 255, (5, 5), 0)[..., None]
     roi = out[y:y + ph, x:x + pw].astype(np.float32)
-    out[y:y + ph, x:x + pw] = (alpha * patch + (1 - alpha) * roi).astype(np.uint8)
+    out[y:y + ph, x:x + pw] = (a * patch + (1 - a) * roi).astype(np.uint8)
     return out
 
 
-def ground_spot(size, bottom_y, taken, w, h, rng, tries=200):
-    """발밑 높이(bottom_y)를 맞춘 채 옆으로만 움직여, 겹치지 않는 자리를 찾는다."""
-    pw, ph = size
-    y = int(bottom_y - ph)
-    if y < 0 or bottom_y > h:
-        return None
+def recolor(img, mask, rng):
+    """물체 색상(hue)만 돌린다. 색이 거의 없는(회색) 물체는 밝기를 바꾼다."""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.int32)
+    sel = mask > 0
+    sat = hsv[..., 1][sel].mean()
+    if sat > 60:
+        hsv[..., 0][sel] = (hsv[..., 0][sel] + rng.choice([45, 60, 90, 120, 135])) % 180
+        how = "색상"
+    else:
+        f = rng.choice([0.55, 1.5])
+        hsv[..., 2][sel] = np.clip(hsv[..., 2][sel] * f, 0, 255)
+        how = "밝기"
+    return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR), how
+
+
+def flip_in_place(img, mask, box):
+    x1, y1, x2, y2 = box
+    patch = cv2.flip(img[y1:y2, x1:x2], 1)
+    m = cv2.flip(mask[y1:y2, x1:x2], 1)
+    return alpha_paste(img, patch, m, (x1, y1))
+
+
+def ring_color(img, box, pad=8):
+    """박스 주변 띠의 평균 색 (바닥 색이 비슷한지 볼 때 쓴다)"""
+    h, w = img.shape[:2]
+    x1, y1, x2, y2 = box
+    outer = img[max(0, y1 - pad):min(h, y2 + pad), max(0, x1 - pad):min(w, x2 + pad)].reshape(-1, 3).astype(np.float32)
+    inner = img[y1:y2, x1:x2].reshape(-1, 3).astype(np.float32)
+    s_o, s_i = outer.sum(0), inner.sum(0)
+    n = len(outer) - len(inner)
+    return (s_o - s_i) / max(n, 1)
+
+
+def find_spot(img, box, taken, rng, max_shift=None, tries=80):
+    """같은 높이에서 옆으로 옮길 자리. 다른 물체와 겹치지 않고 주변 바닥 색이 원래 자리와 비슷해야 한다."""
+    h, w = img.shape[:2]
+    x1, y1, x2, y2 = box
+    bw = x2 - x1
+    ref = ring_color(img, box)
+    max_shift = max_shift or w
     for _ in range(tries):
-        x = rng.randint(3, max(3, w - pw - 3))
-        cand = (x, y, x + pw, y + ph)
-        if all(iou(cand, t) == 0 for t in taken):
+        dx = rng.randint(int(bw * 1.2), int(max(bw * 1.2 + 1, max_shift)))
+        nx = x1 + dx * rng.choice([-1, 1])
+        if nx < 3 or nx + bw > w - 3:
+            continue
+        cand = (nx, y1, nx + bw, y2)
+        if any(iou(cand, t) > 0 for t in taken):
+            continue
+        if np.abs(ring_color(img, cand) - ref).mean() < 22:
             return cand
     return None
 
 
-def build_bank():
-    """다른 사진에서 가져와 붙일 물체 조각 (땅 위에 서는 물체만)"""
-    bank = []
-    for p in sorted((COCO / "images" / "train2017").glob("*.jpg")):
-        img = cv2.imread(str(p))
-        h, w = img.shape[:2]
-        objs = load_boxes(p, w, h)
-        for o in objs:
-            if o[0] in GROUND and usable(o, objs, w, h):
-                x1, y1, x2, y2 = o[1:]
-                m = object_mask(img, (x1, y1, x2, y2), fallback=False)
-                if m is not None:
-                    bank.append((o[0], img[y1:y2, x1:x2].copy(), m[y1:y2, x1:x2], p.name))
-    return bank
-
-
-def make_pair(img_path, n_diffs, rng, bank):
+# ---------------------------------------------------------------- 문제 만들기
+def make_pair(img_path, ed, rng, n_min, n_max, hard):
     a = cv2.imread(str(img_path))
     h, w = a.shape[:2]
     objs = load_boxes(img_path, w, h)
-    if not objs or not is_city(objs, w, h):
+    if not any(o[0] in CITY_CLASSES and (o[3] - o[1]) * (o[4] - o[2]) >= w * h * 0.01 for o in objs):
+        return None                                        # 도시 장면이 아니다
+
+    cands = []
+    for o in objs:
+        c, x1, y1, x2, y2 = o
+        area = (x2 - x1) * (y2 - y1) / (w * h)
+        if not (0.0006 <= area <= 0.08) or (x2 - x1) < 10 or (y2 - y1) < 10:
+            continue
+        if x1 < 2 or y1 < 2 or x2 > w - 2 or y2 > h - 2:
+            continue
+        if any(iou(o[1:], p[1:]) > 0.15 for p in objs if p is not o):
+            continue
+        cands.append(o)
+    target = rng.randint(n_min, n_max) if not hard else rng.randint(n_max, hard)
+    if len(cands) < n_min:
         return None
-    cands = [o for o in objs if usable(o, objs, w, h)]
     rng.shuffle(cands)
+    masks = ed.masks_for(a, cands)
 
     b = a.copy()
     taken = [o[1:] for o in objs]
     diffs = []
-    for obj in cands[:n_diffs]:
-        c, x1, y1, x2, y2 = obj
+    for o, m in zip(cands, masks):
+        if len(diffs) >= target:
+            break
+        c, x1, y1, x2, y2 = o
         box = (x1, y1, x2, y2)
-        m = object_mask(a, box)
-        kind = rng.choice(["remove", "remove", "move"]) if c in GROUND else "remove"
-        if kind == "move":
-            spot = ground_spot((x2 - x1, y2 - y1), y2, taken + [box], w, h, rng)
-            if spot is not None and abs(spot[0] - x1) > (x2 - x1):
-                b = erase(b, m)
-                b = paste(b, a[y1:y2, x1:x2], m[y1:y2, x1:x2], spot[:2])
-                taken.append(spot)
-                diffs.append({"kind": "move", "class": NAMES[c], "box_a": box, "box_b": spot})
-                continue
-        b = erase(b, m)
-        diffs.append({"kind": "remove", "class": NAMES[c], "box_a": box, "box_b": None})
+        area = (x2 - x1) * (y2 - y1) / (w * h)
+        name = ed.names[c]
+        if m is None or m[y1:y2, x1:x2].mean() < 255 * 0.15:
+            continue
+        options = []
+        if area <= 0.03:
+            options += ["remove"] * 3
+        options += ["recolor"] * 3
+        if c in FLIPPABLE and (x2 - x1) > 24:
+            options += ["flip"]
+        if area <= 0.03:
+            options += ["copy", "move"]
+        kind = rng.choice(options)
 
-    # 바꿀 물체가 모자라면 다른 사진의 물체를 이 사진 속 비슷한 물체 크기·발밑 높이에 맞춰 놓는다
-    anchors = [o for o in objs if o[0] in GROUND]
-    tries = 0
-    while len(diffs) < n_diffs and bank and anchors and tries < 60:
-        tries += 1
-        c, patch, pm, src_name = bank[rng.randrange(len(bank))]
-        if src_name == img_path.name:
-            continue
-        ref = [o for o in anchors if o[0] == c] or anchors
-        _, rx1, ry1, rx2, ry2 = rng.choice(ref)
-        scale = (ry2 - ry1) / patch.shape[0] * (1.0 if c == ref[0][0] else 0.8)
-        pw, ph = int(patch.shape[1] * scale), int(patch.shape[0] * scale)
-        if pw < 12 or ph < 12 or pw > w * 0.4 or ph > h * 0.6:
-            continue
-        spot = ground_spot((pw, ph), ry2, taken, w, h, rng)
-        if spot is None:
-            continue
-        b = paste(b, cv2.resize(patch, (pw, ph)), cv2.resize(pm, (pw, ph)), spot[:2])
-        taken.append(spot)
-        diffs.append({"kind": "copy", "class": NAMES[c], "box_a": None, "box_b": spot})
-    if len(diffs) < n_diffs:
+        if kind == "remove":
+            b = ed.remove(b, m)
+            diffs.append({"kind": kind, "class": name, "box_a": box, "box_b": None})
+        elif kind == "recolor":
+            b, how = recolor(b, m, rng)
+            diffs.append({"kind": kind, "class": name, "box_a": box, "box_b": box, "note": how})
+        elif kind == "flip":
+            b = flip_in_place(b, m, box)
+            diffs.append({"kind": kind, "class": name, "box_a": box, "box_b": box})
+        else:
+            spot = find_spot(a, box, taken, rng, max_shift=int(w * 0.35) if kind == "move" else None)
+            if spot is None:
+                b, how = recolor(b, m, rng)                # 자리가 없으면 색만 바꾼다
+                diffs.append({"kind": "recolor", "class": name, "box_a": box, "box_b": box, "note": how})
+                continue
+            if kind == "move":
+                b = ed.remove(b, m)
+            b = alpha_paste(b, a[y1:y2, x1:x2], m[y1:y2, x1:x2], spot[:2])
+            taken.append(spot)
+            diffs.append({"kind": kind, "class": name, "box_a": box if kind == "move" else None, "box_b": spot})
+    if len(diffs) < n_min:
         return None
     return a, b, diffs
 
@@ -191,7 +237,8 @@ def make_pair(img_path, n_diffs, rng, bank):
 def draw_answer(a, b, diffs):
     va, vb = a.copy(), b.copy()
     for i, d in enumerate(diffs, 1):
-        for im, box, thick in ((va, d["box_a"], 2), (vb, d["box_b"], 2), (vb, d["box_a"] if d["kind"] == "remove" else None, 1)):
+        for im, box, thick in ((va, d["box_a"], 2), (vb, d["box_b"], 2),
+                               (vb, d["box_a"] if d["kind"] == "remove" else None, 1)):
             if box is None:
                 continue
             x1, y1, x2, y2 = box
@@ -201,38 +248,67 @@ def draw_answer(a, b, diffs):
     return cv2.hconcat([va, gap, vb])
 
 
+def where(box, w, h):
+    cx, cy = (box[0] + box[2]) / 2 / w, (box[1] + box[3]) / 2 / h
+    return ["위", "가운데", "아래"][min(2, int(cy * 3))] + " " + ["왼쪽", "가운데", "오른쪽"][min(2, int(cx * 3))]
+
+
+def describe(d, w, h):
+    k = d["kind"]
+    if k == "remove":
+        return f"A의 {where(d['box_a'], w, h)}에 있던 것이 B에서 없어짐"
+    if k == "move":
+        return f"A의 {where(d['box_a'], w, h)} → B의 {where(d['box_b'], w, h)}"
+    if k == "copy":
+        return f"B의 {where(d['box_b'], w, h)}에 하나 더 생김"
+    if k == "recolor":
+        return f"{where(d['box_a'], w, h)} — {d.get('note', '색')}이 바뀜"
+    return f"{where(d['box_a'], w, h)} — 좌우가 뒤집힘"
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--n", type=int, default=20, help="만들 문제 수")
-    ap.add_argument("--diffs", type=int, default=3, help="문제당 차이 개수")
-    ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--min", type=int, default=5)
+    ap.add_argument("--max", type=int, default=7)
+    ap.add_argument("--hard", type=int, default=10, help="어려운 문제(3문제마다 1개)의 최대 차이 수")
+    ap.add_argument("--seed", type=int, default=11)
     args = ap.parse_args()
     rng = random.Random(args.seed)
+    ed = Editor()
 
     for sub in ("A", "B", "answer"):
         (OUT / sub).mkdir(parents=True, exist_ok=True)
-    bank = build_bank()
-    print("붙여 넣을 물체 조각", len(bank), "개")
     answers, thumbs = {}, []
     for p in sorted((COCO / "images" / "train2017").glob("*.jpg")):
-        res = make_pair(p, args.diffs, rng, bank)
+        hard = args.hard if (len(answers) % 3 == 2) else 0
+        res = make_pair(p, ed, rng, args.min, args.max, hard)
         if res is None:
             continue
         a, b, diffs = res
         qid = f"city_{len(answers) + 1:02d}"
-        cv2.imwrite(str(OUT / "A" / f"{qid}.jpg"), a)
-        cv2.imwrite(str(OUT / "B" / f"{qid}.jpg"), b)
+        cv2.imwrite(str(OUT / "A" / f"{qid}.jpg"), a, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        cv2.imwrite(str(OUT / "B" / f"{qid}.jpg"), b, [cv2.IMWRITE_JPEG_QUALITY, 95])
         ans = draw_answer(a, b, diffs)
         cv2.imwrite(str(OUT / "answer" / f"{qid}.jpg"), ans)
-        answers[qid] = {"source": p.name, "size": [a.shape[1], a.shape[0]],
+        answers[qid] = {"source": p.name, "size": [a.shape[1], a.shape[0]], "hard": bool(hard),
                         "differences": [{"no": i, **d} for i, d in enumerate(diffs, 1)]}
         t = cv2.resize(ans, (640, int(ans.shape[0] * 640 / ans.shape[1])))
-        cv2.putText(t, qid, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+        cv2.putText(t, f"{qid} ({len(diffs)})", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
         thumbs.append(t)
-        if len(answers) == args.n:
-            break
+        print(f"{qid}: {p.name} | 차이 {len(diffs)}개 " + ("(어려움)" if hard else ""))
 
     (OUT / "answers.json").write_text(json.dumps(answers, ensure_ascii=False, indent=1), encoding="utf-8")
+    lines = ["# 도시 틀린그림찾기 정답표", "",
+             "사진 A(원본)와 B(바뀐 사진)를 비교했을 때의 정답이다. `answer/` 폴더 이미지에 같은 번호로 표시돼 있다.",
+             "위치는 사진을 가로·세로 3칸씩 나눴을 때 어느 칸인지로 적었다.", ""]
+    for qid, v in answers.items():
+        w, h = v["size"]
+        lines += [f"## {qid} (원본 {v['source']}, 차이 {len(v['differences'])}개" + (", 어려움)" if v["hard"] else ")"),
+                  "", "| 번호 | 종류 | 물체 | 위치 |", "|---|---|---|---|"]
+        lines += [f"| {d['no']} | {KIND_KO[d['kind']]} | {d['class']} | {describe(d, w, h)} |" for d in v["differences"]]
+        lines.append("")
+    (OUT / "정답표.md").write_text("\n".join(lines), encoding="utf-8")
+
     rows = []
     for i in range(0, len(thumbs), 2):
         pair = thumbs[i:i + 2]
@@ -243,29 +319,8 @@ def main():
         rows.append(cv2.hconcat(pair))
     if rows:
         cv2.imwrite(str(OUT / "answer_sheet.jpg"), cv2.vconcat(rows))
-    # 사람이 확인하기 쉬운 정답표
-    lines = ["# 도시 틀린그림찾기 정답표", "",
-             "사진 A(원본)와 B(바뀐 사진)를 비교했을 때의 정답이다. `answer/` 폴더의 이미지에 같은 번호로 표시돼 있다.",
-             "위치는 사진을 가로·세로 3칸씩 나눴을 때 어느 칸인지로 적었다.", ""]
-    def where(box, w, h):
-        cx, cy = (box[0] + box[2]) / 2 / w, (box[1] + box[3]) / 2 / h
-        return ["위", "가운데", "아래"][min(2, int(cy * 3))] + " " + ["왼쪽", "가운데", "오른쪽"][min(2, int(cx * 3))]
-    for qid, v in answers.items():
-        w, h = v["size"]
-        lines += [f"## {qid} (원본 {v['source']})", "", "| 번호 | 종류 | 물체 | 위치 |", "|---|---|---|---|"]
-        for d in v["differences"]:
-            if d["kind"] == "remove":
-                pos = f"A의 {where(d['box_a'], w, h)}에 있던 것이 B에서 없어짐"
-            elif d["kind"] == "move":
-                pos = f"A의 {where(d['box_a'], w, h)} → B의 {where(d['box_b'], w, h)}"
-            else:
-                pos = f"B의 {where(d['box_b'], w, h)}에 새로 생김"
-            lines.append(f"| {d['no']} | {KIND_KO[d['kind']]} | {d['class']} | {pos} |")
-        lines.append("")
-    (OUT / "정답표.md").write_text("\n".join(lines), encoding="utf-8")
-
     kinds = [d["kind"] for v in answers.values() for d in v["differences"]]
-    print(f"문제 {len(answers)}개 | 차이 {len(kinds)}개 (사라짐 {kinds.count('remove')}, 이동 {kinds.count('move')}, 추가 {kinds.count('copy')})")
+    print(f"문제 {len(answers)}개 | 차이 {len(kinds)}개 | " + ", ".join(f"{KIND_KO[k]} {kinds.count(k)}" for k in KIND_KO))
 
 
 if __name__ == "__main__":
