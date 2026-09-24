@@ -22,3 +22,6 @@ data/stamp_robust/
 datasets/
 .ultralytics/
 weights/
+
+# 틀린그림찾기: 원본 자료는 용량이 커서 제외 (구글 드라이브에 원본 보관)
+spotdiff/data/
