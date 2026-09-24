@@ -1,4 +1,4 @@
-# CV-YOLO — YOLOv8 기반 제조 데이터 객체 탐지
+# CV-YOLO — YOLOv8 기반 제조 데이터 객체 탐지 + 틀린그림찾기
 
 제조 공정 영상(작업대 위 **신발 + 도장**)에서 YOLO로 물체를 탐지하고, 모델·데이터·촬영 조건에 따른 성능 범위를 실험한 프로젝트입니다.
 
@@ -52,6 +52,38 @@
 - 신뢰도를 올리면 오탐이 줄어 정밀도가 0.98까지 오르지만, 전체 성능(F1)은 거의 같습니다.
 - 도장은 검증 재현율 1.000으로, "도장이 찍혔는지" 확인하는 공정 목적에는 충분합니다.
 
+## 틀린그림찾기 핵 (spotdiff)
+
+두 그림에서 다른 곳을 **YOLO로** 찾아 표시하는 두 번째 과제입니다. YOLO로 두 그림의 물체를 전부 찾고, 박스끼리 짝지어 비교합니다.
+
+- 📓 **노트북**: [spotdiff/spotdiff_yolo.ipynb](spotdiff/spotdiff_yolo.ipynb) — 데이터 확인 → YOLO 탐지 → 짝짓기 → 내용 비교 → 5문제 채점
+- 📝 **작업 기록**: [spotdiff/report/작업기록.md](spotdiff/report/작업기록.md) ([PDF](spotdiff/report/작업기록.pdf)) — 흐름 단위 시행착오
+- 🧩 **데이터**: [spotdiff/dataset_ai/](spotdiff/dataset_ai/) — Gemini로 만든 5문제 (A·B 그림, [정답표](spotdiff/dataset_ai/정답표.md), 정답 위치 `answers.json`)
+
+**흐름**: 틀린그림찾기 만들기 → 선 그림 도안은 YOLO가 물체를 못 찾고, 사진을 직접 편집한 데이터는 부자연스러워서 데이터셋 구하기가 어려움 → **Gemini로 문제 그림 생성** → 탐지기 제작
+
+**탐지기** ([spotdiff/src/detect_diff.py](spotdiff/src/detect_diff.py))
+
+1. YOLO11x로 A·B의 물체를 모두 탐지 (신뢰도 0.10)
+2. 겹치는 박스끼리 짝짓기 (IoU ≥ 0.5): 짝이 없거나 클래스가 다르면 후보
+3. 후보 자리를 A·B에서 잘라 내용 비교: 조각을 맞춘 뒤 **색이 바뀐 픽셀 비율**, 색 분포 거리
+4. 같은 종류는 묶고, 겹치면 작은 박스만 남김
+
+**결과 (5문제, 정답 35개)**
+
+| 문제 | 정답 | 찾음 | 탐지 | 맞음 |
+|---|---|---|---|---|
+| cafe_01 | 6 | 3 | 3 | 3 |
+| plaza_01 | 8 | 8 | 11 | 11 |
+| subway_01 | 7 | 3 | 4 | 4 |
+| camping_01 | 7 | 5 | 4 | 4 |
+| bookstore_01 | 7 | 4 | 4 | 4 |
+| **합계** | **35** | **23** | **26** | **26** |
+
+재현율 **65.7%**, 정밀도 **100%**. 놓친 12개 중 8개는 안경·모자·팻말처럼 YOLO가 배운 80가지 물체(COCO)에 없는 것이라 박스 자체가 생기지 않았습니다.
+
+![](spotdiff/results_ai/subway_01.jpg)
+
 ## 레포 구조
 
 ```
@@ -71,6 +103,18 @@ CV-YOLO/
 ├── tools/
 │   ├── make_pdf.py           # 노트북 → 제출용 PDF
 │   └── shrink_notebook.py    # 노트북 이미지 용량 줄이기 (GitHub 표시용)
+├── spotdiff/             # 틀린그림찾기 핵
+│   ├── spotdiff_yolo.ipynb   # 탐지기 노트북 (실행 결과 포함)
+│   ├── dataset_ai/           # Gemini로 만든 5문제: original/, A/, B/, 정답표.md, answers.json
+│   ├── results_ai/           # 탐지 결과 이미지, 기준선 산점도, score.json
+│   ├── report/               # 작업기록.md / .pdf, 그림
+│   ├── src/
+│   │   ├── detect_diff.py        # 탐지기 + 채점
+│   │   ├── prepare_pairs.py      # Gemini 그림에서 A·B 그림만 잘라내기
+│   │   ├── make_report_pdf.py    # 작업기록 → PDF
+│   │   ├── make_city_dataset.py  # (시행착오) COCO 사진 직접 편집
+│   │   └── find_diff.py          # (시행착오) 픽셀 차이 방식
+│   └── dataset_city/, results/   # 시행착오 기록용
 ├── report/images/        # 그래프
 ├── results/              # 실험 결과 csv
 └── CV-YOLO_제출본.pdf
@@ -92,6 +136,8 @@ python -m ipykernel install --sys-prefix --name cv-yolo --display-name "CV-YOLO 
 2. `Jupyter_실행.bat` 실행 → `yolov8_manufacturing_practice.ipynb`를 **CV-YOLO (.venv)** 커널로 실행
 3. 이미지 용량 줄이기: `python tools/shrink_notebook.py notebooks/yolov8_manufacturing_practice.ipynb`
 4. PDF 생성: `python tools/make_pdf.py`
+
+**틀린그림찾기**: `spotdiff` 폴더에서 `spotdiff_yolo.ipynb`를 **CV-YOLO (.venv)** 커널로 실행하거나, `python spotdiff/src/detect_diff.py`로 채점만 돌립니다. YOLO11x 가중치는 처음 실행할 때 자동으로 내려받습니다.
 
 ## 환경
 Windows 11 · Python 3.11 · PyTorch 2.11 (CUDA 12.8) · Ultralytics 8.4.154 · RTX 5060 Laptop 8GB
