@@ -24,7 +24,8 @@ import shrink_notebook  # noqa: E402
 
 PRACTICE = ROOT / "notebooks" / "실습_직접해보기.ipynb"
 SPOTDIFF = ROOT / "spotdiff" / "spotdiff_yolo.ipynb"
-SUBMISSION = ROOT / "notebooks" / "yolov8_manufacturing_practice_original.ipynb"   # 개인 회고(막힌 부분·KPT·AAR)를 가져올 곳
+SUBMISSION = ROOT / "notebooks" / "yolov8_manufacturing_practice_original.ipynb"   # 개인 실험 1을 가져올 곳
+RETRO_MD = ROOT / "report" / "개인회고.md"          # 맨 끝 개인 회고
 OUT_NB = ROOT / "최종확인_노트북.ipynb"
 OUT_PDF = ROOT / "최종확인_노트북.pdf"
 PART1 = "1부. YOLOv8 제조 데이터 객체 탐지 실습 — 직접 해보기"
@@ -83,9 +84,10 @@ def exp1_cells():
 
 
 def retro_cells():
-    """제출용 실습 노트북 끝의 '# 개인 회고' 칸을 그대로 가져온다."""
-    nb = nbformat.read(SUBMISSION, as_version=4)
-    return [copy.deepcopy(c) for c in nb.cells if c.cell_type == "markdown" and c.source.lstrip().startswith("# 개인 회고")]
+    """맨 끝의 개인 회고(막혔던 부분과 해결, 실습 전체 정리, KPT, AAR)를 report/개인회고.md에서 가져온다."""
+    text = RETRO_MD.read_text(encoding="utf-8").strip()
+    parts = text.split("\n### ")
+    return [nbformat.v4.new_markdown_cell(parts[0])] + [nbformat.v4.new_markdown_cell("### " + p) for p in parts[1:]]
 
 
 def build():
@@ -93,13 +95,12 @@ def build():
     # 개인 실험 1은 사전학습 모델(model)과 버스 사진(img_np)을 쓰므로, 학습(흐름 9) 전에 넣는다
     at = next(i for i, c in enumerate(p1) if c.cell_type == "markdown" and c.source.startswith("## 흐름 9"))
     p1 = p1[:at] + exp1_cells() + p1[at:]
-    # 직접 쓴 '전체 정리'는 개인 회고와 함께 맨 끝으로 옮기고, 빈 칸은 뺀다
-    summary = [c for c in p1 if c.cell_type == "markdown" and "## 전체 정리" in c.source]
-    p1 = [c for c in p1 if c not in summary and c.source.strip()]
+    # 직접 쓴 '전체 정리'는 report/개인회고.md에 옮겨 두었으므로 1부에서는 빼고, 빈 칸도 뺀다
+    p1 = [c for c in p1 if not (c.cell_type == "markdown" and "## 전체 정리" in c.source) and c.source.strip()]
     p2 = part_cells(SPOTDIFF, PART2, "spotdiff")
     base = nbformat.read(SPOTDIFF, as_version=4)
     full = nbformat.v4.new_notebook(metadata=base.metadata)
-    ending = retro_cells() + summary
+    ending = retro_cells()
     full.cells = [nbformat.v4.new_markdown_cell(INTRO)] + p1 + p2 + ending
     renumber(full)
     return full, p1, p2, ending
