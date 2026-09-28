@@ -4,7 +4,7 @@
 
 결과
 - 최종확인_노트북.ipynb : 두 노트북을 합친 것 (GitHub에서 열리도록 이미지 압축)
-- 최종확인_노트북.pdf   : 표지 + 1부 + 2부
+- 최종확인_노트북.pdf   : 표지 + 1부 + 2부 + 개인 회고
 
 각 부의 실행 결과는 원래 노트북을 실행한 결과를 그대로 옮긴 것이다.
 (1부는 학습이 들어 있어 다시 실행하면 시간이 걸린다.)
@@ -24,10 +24,12 @@ import shrink_notebook  # noqa: E402
 
 PRACTICE = ROOT / "notebooks" / "실습_직접해보기.ipynb"
 SPOTDIFF = ROOT / "spotdiff" / "spotdiff_yolo.ipynb"
+SUBMISSION = ROOT / "notebooks" / "yolov8_manufacturing_practice_original.ipynb"   # 개인 회고(막힌 부분·KPT·AAR)를 가져올 곳
 OUT_NB = ROOT / "최종확인_노트북.ipynb"
 OUT_PDF = ROOT / "최종확인_노트북.pdf"
 PART1 = "1부. YOLOv8 제조 데이터 객체 탐지 실습 — 직접 해보기"
 PART2 = "2부. YOLO로 틀린그림찾기"
+RETRO = "개인 회고"
 
 INTRO = f"""# 최종 확인 노트북
 
@@ -35,12 +37,13 @@ INTRO = f"""# 최종 확인 노트북
 
 | 부 | 내용 | 원래 노트북 |
 |---|---|---|
-| {PART1} | 과제 원본 코드(버스 이미지 추론, stamp 데이터 학습·평가)를 11개 흐름으로 나눠 직접 실행하고, 흐름마다 이해한 내용을 **✍️ 내 코멘트** 칸에 직접 적었다 | `notebooks/실습_직접해보기.ipynb` |
+| {PART1} | 과제 원본 코드(버스 이미지 추론, stamp 데이터 학습·평가)를 11개 흐름으로 나눠 직접 실행하고, 흐름마다 이해한 내용을 **✍️ 내 코멘트** 칸에 직접 적었다. 흐름 8 뒤에는 **🔬 개인 실험 1**(신뢰도 임계값, 추가 샘플 zidane으로 모델 비교, IoU·NMS)을 넣었다 | `notebooks/실습_직접해보기.ipynb` |
 | {PART2} | Gemini로 문제 그림 5장을 만들고, YOLO로 두 그림의 물체를 찾아 비교하는 탐지기를 만들어 채점했다 (재현율 65.7%, 정밀도 100%) | `spotdiff/spotdiff_yolo.ipynb` |
 
 각 부의 실행 결과는 원래 노트북을 실행한 결과를 그대로 옮긴 것이다. 1부는 학습이 들어 있어 처음부터 다시 실행하면 시간이 걸린다.
 각 부 앞의 작업 폴더 이동 칸은 이 노트북을 레포 맨 위에서 다시 실행할 때를 위한 것이다.
 틀린그림찾기를 만들며 겪은 시행착오는 `spotdiff/report/작업기록.md`에 따로 정리했다.
+개인 회고(막혔던 부분과 해결, KPT, AAR)와 실습 전체 정리는 맨 끝에 한 번에 적었다.
 """
 
 
@@ -70,24 +73,46 @@ def renumber(nb):
         c["id"] = f"cell-{i:03d}"
 
 
+def exp1_cells():
+    """제출용 실습 노트북의 '🔬 개인 실험 1' 부분(신뢰도, 모델 비교, IoU·NMS)을 그대로 가져온다."""
+    nb = nbformat.read(SUBMISSION, as_version=4)
+    is_title = lambda c, t: c.cell_type == "markdown" and any(l.lstrip("# ").startswith(t) for l in c.source.splitlines() if l.startswith("#"))
+    start = next(i for i, c in enumerate(nb.cells) if is_title(c, "🔬 개인 실험 1"))       # 목차 글자가 아닌 제목 줄로 찾는다
+    end = next(i for i, c in enumerate(nb.cells) if i > start and is_title(c, "Part 2"))
+    return [copy.deepcopy(c) for c in nb.cells[start:end]]
+
+
+def retro_cells():
+    """제출용 실습 노트북 끝의 '# 개인 회고' 칸을 그대로 가져온다."""
+    nb = nbformat.read(SUBMISSION, as_version=4)
+    return [copy.deepcopy(c) for c in nb.cells if c.cell_type == "markdown" and c.source.lstrip().startswith("# 개인 회고")]
+
+
 def build():
     p1 = part_cells(PRACTICE, PART1, "notebooks")
+    # 개인 실험 1은 사전학습 모델(model)과 버스 사진(img_np)을 쓰므로, 학습(흐름 9) 전에 넣는다
+    at = next(i for i, c in enumerate(p1) if c.cell_type == "markdown" and c.source.startswith("## 흐름 9"))
+    p1 = p1[:at] + exp1_cells() + p1[at:]
+    # 직접 쓴 '전체 정리'는 개인 회고와 함께 맨 끝으로 옮기고, 빈 칸은 뺀다
+    summary = [c for c in p1 if c.cell_type == "markdown" and "## 전체 정리" in c.source]
+    p1 = [c for c in p1 if c not in summary and c.source.strip()]
     p2 = part_cells(SPOTDIFF, PART2, "spotdiff")
     base = nbformat.read(SPOTDIFF, as_version=4)
     full = nbformat.v4.new_notebook(metadata=base.metadata)
-    full.cells = [nbformat.v4.new_markdown_cell(INTRO)] + p1 + p2
+    ending = retro_cells() + summary
+    full.cells = [nbformat.v4.new_markdown_cell(INTRO)] + p1 + p2 + ending
     renumber(full)
-    return full, p1, p2
+    return full, p1, p2, ending
 
 
-def make_pdf_file(p1, p2):
+def make_pdf_file(p1, p2, ending):
     tmp = ROOT / "build" / "final_pdf"
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
     make_pdf.TITLE = "최종 확인 노트북<br>YOLO 실습 + 틀린그림찾기"
     make_pdf.SUBTITLE = "과제 실습(제조 데이터 탐지·개인 실험·회고) → 직접 만든 YOLO 틀린그림찾기 탐지기"
     sections = []
-    for i, (title, cells) in enumerate([(PART1, [nbformat.v4.new_markdown_cell(INTRO)] + p1), (PART2, p2)]):
+    for i, (title, cells) in enumerate([(PART1, [nbformat.v4.new_markdown_cell(INTRO)] + p1), (PART2, p2), (RETRO, ending)]):
         nb = nbformat.v4.new_notebook(cells=[copy.deepcopy(c) for c in cells])
         renumber(nb)
         path = tmp / f"part{i + 1}.ipynb"
@@ -111,8 +136,8 @@ def make_pdf_file(p1, p2):
 
 
 def main():
-    full, p1, p2 = build()
-    make_pdf_file(p1, p2)
+    full, p1, p2, ending = build()
+    make_pdf_file(p1, p2, ending)
     nbformat.write(full, OUT_NB)
     # GitHub 웹에서 열리도록 그림을 줄인다 (두 노트북 분량이라 기존보다 더 작게)
     shrink_notebook.MAX_W, shrink_notebook.QUALITY = 720, 60
