@@ -21,7 +21,6 @@ YOLO로 물체를 찾는 컴퓨터 비전 과제를 진행한 레포입니다.
 | 1 | **YOLOv8 제조 데이터 실습** (과제) | 과제 코드를 원본 그대로 실행하고, 파트마다 개인 실험(모델 비교, 신뢰도 최적화)과 회고(KPT/AAR)를 덧붙임 | [노트북](notebooks/yolov8_manufacturing_practice.ipynb), [제출용 PDF](CV-YOLO_제출본.pdf) |
 | 2 | **실습 직접 해보기** | 과제 코드를 11개 흐름으로 나누고, 흐름마다 이해한 내용을 코멘트로 직접 작성 | [노트북](notebooks/실습_직접해보기.ipynb) |
 | 3 | **틀린그림찾기 핵** | 데이터셋을 Gemini로 만들고, YOLO로 두 그림의 물체를 찾아 비교하는 탐지기를 만들어 채점 (재현율 65.7%, 정밀도 100%) | [노트북](spotdiff/spotdiff_yolo.ipynb), [작업기록](spotdiff/report/작업기록.md) ([PDF](spotdiff/report/작업기록.pdf)) |
-| - | (예정) 직접 찍은 제품 정상/불량 탐지 | 웹캠 촬영 → 라벨링 → 학습 → 실시간 판정 코드 골격만 준비, 아직 실행 전 | [노트북 초안](notebooks/03_my_defect_detection.ipynb), `src/` |
 
 ---
 
