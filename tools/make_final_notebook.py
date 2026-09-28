@@ -1,4 +1,4 @@
-"""최종 확인 노트북: 실습 노트북(1부) + 틀린그림찾기 노트북(2부)을 하나로 묶고 PDF도 만든다.
+"""최종 확인 노트북: 실습 직접 해보기(1부) + 틀린그림찾기 노트북(2부)을 하나로 묶고 PDF도 만든다.
 
     python tools/make_final_notebook.py
 
@@ -7,7 +7,7 @@
 - 최종확인_노트북.pdf   : 표지 + 1부 + 2부
 
 각 부의 실행 결과는 원래 노트북을 실행한 결과를 그대로 옮긴 것이다.
-(1부는 학습이 여러 번 들어 있어 다시 실행하면 오래 걸린다.)
+(1부는 학습이 들어 있어 다시 실행하면 시간이 걸린다.)
 """
 import copy
 import shutil
@@ -22,11 +22,11 @@ sys.path.insert(0, str(ROOT / "tools"))
 import make_pdf  # noqa: E402
 import shrink_notebook  # noqa: E402
 
-PRACTICE = ROOT / "notebooks" / "yolov8_manufacturing_practice_original.ipynb"
+PRACTICE = ROOT / "notebooks" / "실습_직접해보기.ipynb"
 SPOTDIFF = ROOT / "spotdiff" / "spotdiff_yolo.ipynb"
 OUT_NB = ROOT / "최종확인_노트북.ipynb"
 OUT_PDF = ROOT / "최종확인_노트북.pdf"
-PART1 = "1부. YOLOv8 제조 데이터 객체 탐지 실습"
+PART1 = "1부. YOLOv8 제조 데이터 객체 탐지 실습 — 직접 해보기"
 PART2 = "2부. YOLO로 틀린그림찾기"
 
 INTRO = f"""# 최종 확인 노트북
@@ -35,10 +35,10 @@ INTRO = f"""# 최종 확인 노트북
 
 | 부 | 내용 | 원래 노트북 |
 |---|---|---|
-| {PART1} | 과제 기본 코드(버스 이미지 추론, stamp 데이터 학습·평가)를 원본 그대로 따라가고, 파트마다 개인 실험(모델 비교, 신뢰도 최적화)과 회고(KPT/AAR)를 덧붙였다 | `notebooks/yolov8_manufacturing_practice.ipynb` |
+| {PART1} | 과제 원본 코드(버스 이미지 추론, stamp 데이터 학습·평가)를 11개 흐름으로 나눠 직접 실행하고, 흐름마다 이해한 내용을 **✍️ 내 코멘트** 칸에 직접 적었다 | `notebooks/실습_직접해보기.ipynb` |
 | {PART2} | Gemini로 문제 그림 5장을 만들고, YOLO로 두 그림의 물체를 찾아 비교하는 탐지기를 만들어 채점했다 (재현율 65.7%, 정밀도 100%) | `spotdiff/spotdiff_yolo.ipynb` |
 
-각 부의 실행 결과는 원래 노트북을 실행한 결과를 그대로 옮긴 것이다. 1부는 학습이 여러 번 들어 있어 처음부터 다시 실행하면 시간이 오래 걸린다.
+각 부의 실행 결과는 원래 노트북을 실행한 결과를 그대로 옮긴 것이다. 1부는 학습이 들어 있어 처음부터 다시 실행하면 시간이 걸린다.
 각 부 앞의 작업 폴더 이동 칸은 이 노트북을 레포 맨 위에서 다시 실행할 때를 위한 것이다.
 틀린그림찾기를 만들며 겪은 시행착오는 `spotdiff/report/작업기록.md`에 따로 정리했다.
 """
